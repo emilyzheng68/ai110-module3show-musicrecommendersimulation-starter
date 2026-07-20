@@ -1,4 +1,3 @@
-cat > src/recommender.py << 'PYEOF'
 """
 Core recommendation logic for the Music Recommender Simulation.
 
@@ -144,6 +143,3 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5):
 
     ranked = sorted(scored, key=lambda item: item[1], reverse=True)
     return ranked[:k]
-PYEOF
-python3 -m pytest
-python3 -m src.main
