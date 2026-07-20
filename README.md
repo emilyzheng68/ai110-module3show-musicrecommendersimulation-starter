@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-This project simulates a content-based music recommender. It scores each song in a catalog against a user's taste profile using genre, mood, and energy, then returns a ranked, explained top-K list of recommendations — each with a plain-language reason for why it was suggested.
+This project simulates a content-based music recommender. It scores each song in a catalog against a user's taste profile using genre, mood, and energy (plus an optional acoustic bonus), then returns a ranked, explained top-K list of recommendations — each with a plain-language reason for why it was suggested.
 
 ---
 
@@ -41,7 +41,7 @@ Looking at `data/songs.csv`, the most effective features for a content-based rec
 
 ### Our Algorithm Recipe
 
-Each song is scored against a user's taste profile using three weighted rules:
+Each song is scored against a user's taste profile using four weighted rules:
 
 **1. Genre Match — +2.0 points**
 If the song's genre exactly matches the user's favorite genre, award 2.0 points. Genre gets the biggest weight because it's the broadest and most stable signal of taste — most listeners have a fairly consistent genre preference that doesn't shift day to day.
@@ -57,14 +57,14 @@ points = 1.5 * (1 - gap)
 ```
 A perfect match (gap = 0) earns the full 1.5 points; a complete mismatch (gap = 1.0) earns 0 points. This scaled approach was chosen deliberately over a simple "above/below threshold" rule, since it lets two songs with a small energy difference score almost as well as an exact match, instead of an all-or-nothing pass/fail.
 
-**Total score** = genre points + mood points + energy points, and each song's result is paired with a plain-language list of *reasons* (e.g., `"genre match (+2.0)"`) so every recommendation is explainable rather than a black-box number.
-
-**Why weight genre highest?** This is a deliberate trade-off worth naming: weighting genre so heavily means the system can over-favor genre matches even when a song's mood or energy is a poor fit — a bias worth revisiting in the evaluation phase.
-
-*(Stretch idea, not yet implemented: `valence` could be added as a fourth closeness-scored feature, similar to energy, to better capture emotional "vibe" independent of the mood label — see the feature evaluation above.)*
-
 **4. Acoustic Bonus — up to +1.0 point (conditional)**
 If the user's profile has `likes_acoustic = True`, the song earns bonus points equal to its `acousticness` value (0.0–1.0) scaled up to 1.0. Users who don't specify an acoustic preference (`likes_acoustic = False`) get no bonus or penalty here.
+
+**Total score** = genre points + mood points + energy points + (conditional) acoustic points, and each song's result is paired with a plain-language list of *reasons* (e.g., `"genre match (+2.0)"`) so every recommendation is explainable rather than a black-box number.
+
+**Why weight genre highest?** This is a deliberate trade-off worth naming: weighting genre so heavily means the system can over-favor genre matches even when a song's mood or energy is a poor fit — a bias confirmed in the evaluation phase (see below and `model_card.md`).
+
+*(Stretch idea, not yet implemented: `valence` could be added as a fifth closeness-scored feature, similar to energy, to better capture emotional "vibe" independent of the mood label.)*
 
 ### Data Objects
 
@@ -72,8 +72,8 @@ If the user's profile has `likes_acoustic = True`, the song earns bonus points e
 - `id` — unique identifier
 - `title` — song name
 - `artist` — artist name
-- `genre` — category (e.g., pop, lofi, rock, ambient, jazz, synthwave, indie pop)
-- `mood` — emotional tag (e.g., happy, chill, intense, relaxed, moody, focused)
+- `genre` — category (e.g., pop, lofi, rock, ambient, jazz, synthwave, indie pop, folk, hip hop, classical, r&b, punk, k-pop)
+- `mood` — emotional tag (e.g., happy, chill, intense, relaxed, moody, focused, nostalgic, energetic, sad, angry, calm)
 - `energy` — intensity, 0.0–1.0
 - `tempo_bpm` — beats per minute
 - `valence` — musical positivity/happiness, 0.0–1.0
@@ -88,30 +88,30 @@ If the user's profile has `likes_acoustic = True`, the song earns bonus points e
 
 `genre`, `mood`, `energy`, and (conditionally) `acousticness` are used for scoring in this version — `tempo_bpm`, `valence`, and `danceability` are captured in the dataset but not yet part of the recipe.
 
-**Proposed User Profile**
-````python
+**Proposed User Profile (initial testing)**
+```python
 user_profile = {
     "favorite_genre": "pop",
     "favorite_mood": "happy",
     "target_energy": 0.75
 }
-````
+```
 
-Critique: Can this differentiate "intense rock" vs. "chill lofi"?
-Yes — quite well, actually. Let's check it against your dataset:
+**Critique: Can this differentiate "intense rock" vs. "chill lofi"?**
 
-Storm Runner (rock, intense, energy 0.91): genre doesn't match ("pop" ≠ "rock"), mood doesn't match ("happy" ≠ "intense"), and energy gap is |0.91 - 0.75| = 0.16 → small energy credit only, low total score.
-Library Rain (lofi, chill, energy 0.35): genre doesn't match, mood doesn't match, and energy gap is |0.35 - 0.75| = 0.40 → very little credit anywhere, lowest total score.
-Sunrise City (pop, happy, energy 0.82): genre matches, mood matches, energy gap only 0.07 → high score.
+Yes — quite well, actually. Checked against the dataset:
+- **Storm Runner** (rock, intense, energy 0.91): genre doesn't match ("pop" ≠ "rock"), mood doesn't match ("happy" ≠ "intense"), energy gap is `|0.91 - 0.75| = 0.16` → small energy credit only, low total score.
+- **Library Rain** (lofi, chill, energy 0.35): genre doesn't match, mood doesn't match, energy gap is `|0.35 - 0.75| = 0.40` → very little credit anywhere, lowest total score.
+- **Sunrise City** (pop, happy, energy 0.82): genre matches, mood matches, energy gap only `0.07` → high score.
 
 So this profile correctly separates all three clusters — pop/happy songs rank highest, rock/intense songs score low on genre+mood but get partial energy credit, and lofi/chill songs score lowest overall since they're low-energy and mismatched on both categorical fields.
-Where it's too narrow: the profile can differentiate genres and moods that are explicitly present in the dataset, but it can't express any preference within a genre or mood, and it treats every non-matching genre/mood identically. For example:
 
-A user who likes pop and occasional lofi has no way to express that — favorite_genre only accepts one value.
-Two songs that both fail genre + mood matching (say, a "rock/intense" and a "jazz/relaxed" song) get scored purely on energy closeness, even though they're wildly different vibes — the profile can't tell them apart beyond that one number.
-It ignores valence entirely, so a "happy" mood match doesn't actually verify the song feels positive (per the mismatch we found earlier between mood labels and valence).
+**Where it's too narrow:**
+- A user who likes pop *and* occasional lofi has no way to express that — `favorite_genre` only accepts one value.
+- Two songs that both fail genre + mood matching get scored purely on energy closeness, even though they could be wildly different vibes.
+- It ignores valence entirely, so a "happy" mood match doesn't verify the song actually feels positive (per the mood/valence mismatch found in the feature evaluation above).
 
-Verdict: the three-field profile is good enough to clearly separate broad clusters like "intense rock" vs. "chill lofi," which is what this step is testing for — but it's a blunt instrument for anything more nuanced (mixed tastes, within-genre preference, mood/valence mismatches). That's worth a line in your Limitations section later.
+**Verdict:** the three-field profile clearly separates broad clusters like "intense rock" vs. "chill lofi," but it's a blunt instrument for anything more nuanced (mixed tastes, within-genre preference, mood/valence mismatches) — see Limitations below.
 
 ---
 
@@ -136,7 +136,7 @@ Verdict: the three-field profile is good enough to clearly separate broad cluste
 3. Run the app:
 
 ```bash
-   python -m src.main
+   python3 -m src.main
 ```
 
 ### Running Tests
@@ -144,7 +144,7 @@ Verdict: the three-field profile is good enough to clearly separate broad cluste
 Run the starter tests with:
 
 ```bash
-pytest
+python3 -m pytest
 ```
 
 You can add more tests in `tests/test_recommender.py`.
@@ -152,6 +152,8 @@ You can add more tests in `tests/test_recommender.py`.
 ---
 
 ## Sample Recommendation Output
+
+Baseline run with the default pop/happy profile:
 
 ```
 Loaded songs: 18
@@ -173,33 +175,110 @@ Loaded songs: 18
    Reasons: energy similarity (+1.48, gap=0.01)
 ```
 
+Stress-test run with four diverse profiles (High-Energy Pop, Chill Lofi, Deep Sad Classical, and an adversarial sad+high-energy profile):
+
+```
+Loaded songs: 18
+
+=== High-Energy Pop ===
+Preferences: {'genre': 'pop', 'mood': 'intense', 'energy': 0.95}
+1. Gym Hero by Max Pulse
+   Score: 4.47
+   Reasons: genre match (+2.0), mood match (+1.0), energy similarity (+1.47, gap=0.02)
+2. Sunrise City by Neon Echo
+   Score: 3.30
+   Reasons: genre match (+2.0), energy similarity (+1.3, gap=0.13)
+3. Storm Runner by Voltline
+   Score: 2.44
+   Reasons: mood match (+1.0), energy similarity (+1.44, gap=0.04)
+4. Broken Glass Anthem by Riot Static
+   Score: 1.48
+   Reasons: energy similarity (+1.48, gap=0.01)
+5. Cherry Skyline by NEON DAWN
+   Score: 1.35
+   Reasons: energy similarity (+1.35, gap=0.10)
+
+=== Chill Lofi ===
+Preferences: {'genre': 'lofi', 'mood': 'chill', 'energy': 0.15}
+1. Library Rain by Paper Lanterns
+   Score: 4.20
+   Reasons: genre match (+2.0), mood match (+1.0), energy similarity (+1.2, gap=0.20)
+2. Midnight Coding by LoRoom
+   Score: 4.09
+   Reasons: genre match (+2.0), mood match (+1.0), energy similarity (+1.09, gap=0.27)
+3. Focus Flow by LoRoom
+   Score: 3.12
+   Reasons: genre match (+2.0), energy similarity (+1.12, gap=0.25)
+4. Spacewalk Thoughts by Orbit Bloom
+   Score: 2.30
+   Reasons: mood match (+1.0), energy similarity (+1.3, gap=0.13)
+5. Still Water by Elena Voss
+   Score: 1.50
+   Reasons: energy similarity (+1.5, gap=0.00)
+
+=== Deep Sad Classical ===
+Preferences: {'genre': 'classical', 'mood': 'sad', 'energy': 0.2}
+1. Piano in the Rain by Elena Voss
+   Score: 4.47
+   Reasons: genre match (+2.0), mood match (+1.0), energy similarity (+1.47, gap=0.02)
+2. Still Water by Elena Voss
+   Score: 3.42
+   Reasons: genre match (+2.0), energy similarity (+1.42, gap=0.05)
+3. Heartline by Marlowe James
+   Score: 2.35
+   Reasons: mood match (+1.0), energy similarity (+1.35, gap=0.10)
+4. Spacewalk Thoughts by Orbit Bloom
+   Score: 1.38
+   Reasons: energy similarity (+1.38, gap=0.08)
+5. Library Rain by Paper Lanterns
+   Score: 1.28
+   Reasons: energy similarity (+1.28, gap=0.15)
+
+=== Adversarial: Sad + Max Energy ===
+Preferences: {'genre': 'r&b', 'mood': 'sad', 'energy': 0.95}
+1. Heartline by Marlowe James
+   Score: 3.53
+   Reasons: genre match (+2.0), mood match (+1.0), energy similarity (+0.53, gap=0.65)
+2. Slow Burn Confession by Marlowe James
+   Score: 2.73
+   Reasons: genre match (+2.0), energy similarity (+0.73, gap=0.51)
+3. Broken Glass Anthem by Riot Static
+   Score: 1.48
+   Reasons: energy similarity (+1.48, gap=0.01)
+4. Gym Hero by Max Pulse
+   Score: 1.47
+   Reasons: energy similarity (+1.47, gap=0.02)
+5. Storm Runner by Voltline
+   Score: 1.44
+   Reasons: energy similarity (+1.44, gap=0.04)
+```
+
+---
+
 ## Experiments You Tried
 
-_(To be filled in during Phase 4.)_
+I ran a weight-shift experiment: halved the genre weight (2.0 → 1.0) and doubled the energy weight (1.5 → 3.0). The effect was most visible on the adversarial profile above (r&b genre, sad mood, but a near-max energy target of 0.95 — a real but contradictory combination). With the original weights, the top result ("Heartline," a genuine genre and mood match) beat the #2 result by a comfortable 0.80 points. With the shifted weights, that gap collapsed to just 0.08 — nearly letting "Broken Glass Anthem," a punk/angry song with zero connection to sad r&b, outrank the actual match purely because its energy happened to be close to the target. I reverted back to the original weights afterward, since the shift made results *different*, not more accurate — a listener asking for sad r&b almost certainly wouldn't want a punk anthem regardless of tempo.
 
-- What happened when you changed the weight on genre from 2.0 to 0.5
-- What happened when you added tempo or valence to the score
-- How did your system behave for different types of users
+I also tested the system across four different user types (High-Energy Pop, Chill Lofi, Deep Sad Classical, and the adversarial profile above). No single song dominated every list, which suggested genre wasn't so overweighted that it flattened all variety. Full profile-by-profile comparisons are in `model_card.md`, Section 7.
 
 ---
 
 ## Limitations and Risks
 
-_(To be filled in during Phase 4 — go deeper in `model_card.md`.)_
+- The system over-relies on exact-match genre and mood labels — a song that's a near-perfect emotional/energy fit but tagged with a different genre string loses out to a lower-quality match that merely shares a genre label.
+- It cannot blend contradictory preferences. The adversarial test (sad mood + near-max energy) showed the system just picks whichever single dimension scores best, producing an incoherent list rather than finding a genuine middle-ground song.
+- With only 18 songs in the catalog, there's limited room to demonstrate nuance — a larger catalog might reveal further genre-bias patterns a small dataset can't surface.
+- It doesn't understand lyrics, language, or cultural context at all — taste shaped by lyrical meaning is invisible to this system.
 
-- It only works on a tiny catalog (10 songs)
-- It does not understand lyrics or language
-- It might over-favor one genre or mood
+Full analysis with concrete evidence (exact scores, specific songs) is in `model_card.md`, Section 6 (Limitations and Bias).
 
 ---
 
 ## Reflection
 
-Read and complete `model_card.md`:
+Read the complete reflection in [`model_card.md`](model_card.md), Section 9.
 
-[**Model Card**](model_card.md)
-
-_(To be filled in during Phase 5 — 1-2 paragraphs on what you learned about how recommenders turn data into predictions, and where bias or unfairness could show up.)_
+Short version: the biggest lesson was how much a recommender's behavior depends on seemingly arbitrary weight choices — the weight-shift experiment showed that halving genre's weight nearly let a completely irrelevant song outrank a real match. I also found it surprising how "smart" a system with zero actual learning can feel — no training data, no other users, just a handful of if-statements and a subtraction, and the output still feels like a personalized recommendation. That's a useful reminder that perceived intelligence often comes from clear feature design, not necessarily algorithmic sophistication.
 
 
 
